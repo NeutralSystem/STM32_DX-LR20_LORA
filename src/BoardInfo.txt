@@ -43,10 +43,10 @@ PC13    Built-in LED (Active LOW - LOW=ON, HIGH=OFF)
 
 NOTES:
 --------------------------------------------------------------------------------
-- DX-LR30 module uses SX1262 chip (not SX1276!)
+- DX-LR20 module uses SX1262 chip (not SX1276!)
 - Module may have RESET and BUSY pins internally tied - not exposed
 - Use 3.3V logic levels for all GPIO (STM32 is 3.3V, not 5V tolerant on all pins)
-- Serial programming requires BOOT0 button held during reset to enter bootloader
+- Serial upload is handled automatically by PlatformIO (DTR/RTS toggle RESET and BOOT0)
 - After programming, just press RESET to run the uploaded program
 
 ================================================================================

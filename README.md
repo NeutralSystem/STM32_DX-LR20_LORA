@@ -94,7 +94,7 @@ cd STM32LORA
 # Build with PlatformIO
 pio run
 
-# Upload via serial (hold BOOT0 during reset, then release)
+# Upload via serial
 pio run --target upload
 ```
 
