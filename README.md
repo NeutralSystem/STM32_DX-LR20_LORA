@@ -84,7 +84,7 @@ PA7  → MOSI           PA1  → RXEN
 
 ```bash
 # Clone the repository
-git clone https://github.com/<your-username>/STM32LORA.git
+git clone https://github.com/NeutralSystem/STM32_DX-LR20_LORA.git
 cd STM32LORA
 
 # Build with PlatformIO
