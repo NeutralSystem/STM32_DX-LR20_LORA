@@ -6,11 +6,11 @@ A feature-rich serial CLI firmware for **STM32F103C8 "Blue Pill"** + **SX1262 Lo
 ![Framework](https://img.shields.io/badge/framework-Arduino%20%2B%20PlatformIO-orange)
 
 ---
-##Example Hardware
+## Example Hardware
 This board from Aliexpress: 
-<img src="https://github.com/NeutralSystem/STM32_DX-LR20_LORA/blob/main/STM32DXLR20.png" alt="Diagram" width="50" />
 DX-LR20 Semtech LLCC68+STM32F103C8T6 8KM Communication LoRa Module 433Mhz 470 868/915Mhz Wireless Rf Module Development Boards
 
+<img src="https://github.com/NeutralSystem/STM32_DX-LR20_LORA/blob/main/STM32DXLR20.png" alt="Diagram" width="50" />
 ## Features
 
 ### Radio & Messaging
