@@ -1,6 +1,6 @@
 # STM32 LoRa Terminal
 
-A feature-rich serial CLI firmware for **STM32F103C8 "Blue Pill"** + **SX1262 LoRa radio** (DX-LR30 module), turning cheap hardware into a versatile LoRa tool with packet sniffing, spectrum analysis, encrypted chat, Meshtastic monitoring, and full on-the-fly radio configuration — all from a serial terminal.
+A feature-rich serial CLI firmware for **STM32F103C8 "Blue Pill"** + **SX1262 LoRa radio** (DX-LR20 module), turning cheap hardware into a versatile LoRa tool with packet sniffing, spectrum analysis, encrypted chat, Meshtastic monitoring, and full on-the-fly radio configuration — all from a serial terminal.
 ![Platform](https://img.shields.io/badge/platform-STM32F103C8-blue)
 ![Radio](https://img.shields.io/badge/radio-SX1262-green)
 ![Framework](https://img.shields.io/badge/framework-Arduino%20%2B%20PlatformIO-orange)
@@ -59,7 +59,7 @@ Every radio parameter is adjustable on the fly — no recompilation needed:
 | Component | Details |
 |-----------|---------|
 | **MCU** | STM32F103C8T6 "Blue Pill" (64 KB Flash, 20 KB RAM) |
-| **Radio Module** | DX-LR30 (SX1262) |
+| **Radio Module** | DX-LR20 (SX1262) |
 | **Dev Board** | DX-LR20-900M22SP |
 | **Interface** | UART1 @ 115200 baud (PA9=TX, PA10=RX) |
 
@@ -82,7 +82,7 @@ PA7  → MOSI           PA1  → RXEN
 ### Prerequisites
 - [PlatformIO](https://platformio.org/) (VS Code extension or CLI)
 - USB-to-Serial adapter (connect to PA9/PA10)
-- STM32F103C8 board with DX-LR30 SX1262 module
+- STM32F103C8 board with DX-LR20 SX1262 module
 
 ### Build & Flash
 
@@ -201,12 +201,12 @@ STM32LORA/
 
 ## Custom SX1262 Driver
 
-This project uses a **from-scratch SX1262 driver** instead of third-party libraries (RadioLib, LoRaRF, etc.). The driver was built from the manufacturer's working reference code after external libraries failed to communicate with the DX-LR30 module.
+This project uses a **from-scratch SX1262 driver** instead of third-party libraries (RadioLib, LoRaRF, etc.). The driver was built from the manufacturer's working reference code after external libraries failed to communicate with the DX-LR20 module.
 
 Key design decisions:
 - **Exact manufacturer init sequence** — STANDBY_RC → crystal trim → STANDBY_XOSC → DC-DC → PA config
 - **Crystal trimming** — calibrates the TCXO capacitor values (critical for frequency accuracy on this module)
-- **Explicit RF switch control** — the DX-LR30 requires manual TXEN/RXEN GPIO toggling
+- **Explicit RF switch control** — the DX-LR20 requires manual TXEN/RXEN GPIO toggling
 - **Object-oriented C++** — clean `SX1262Radio` class with runtime-configurable parameters
 - **Zero external dependencies** — only requires Arduino SPI
 

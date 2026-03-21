@@ -1,12 +1,3 @@
-/**
- * @file    main.cpp
- * @brief   Serial CLI for STM32 + SX1262 LoRa radio (Meshtastic-style terminal)
- * @details Provides a rich serial command interface for sending/receiving LoRa
- *          messages, sniffing packets with detailed metadata, and changing all
- *          radio parameters on the fly.
- *
- *  Serial port: Serial1 (UART1 PA9=TX, PA10=RX) at 115200 baud.
- */
 #include <Arduino.h>
 #include "sx1262_driver.h"
 
@@ -14,36 +5,27 @@
 //  Application State
 // ═════════════════════════════════════════════════════════════════════════════
 
-/** High-level operating mode of the application */
 enum AppMode : uint8_t {
-    MODE_IDLE,          // Standby – accepts commands
-    MODE_SNIFFING,      // Continuous RX with verbose packet display
-    MODE_BEACONING,     // Periodic TX of a fixed message
-    MODE_ANALYZE,       // Live RSSI analyzer graph
-    MODE_CHAT           // Encrypted chat room mode
+    MODE_IDLE,
+    MODE_SNIFFING,
+    MODE_BEACONING,
+    MODE_ANALYZE,
+    MODE_CHAT
 };
 
-// Global radio instance
 static SX1262Radio radio;
 
-// CLI line buffer
 static char    cmdBuf[256];
 static uint16_t cmdLen = 0;
-
-// Application mode tracking
 static AppMode appMode = MODE_IDLE;
 
-// Beacon state
 static char     beaconMsg[256];
 static uint8_t  beaconLen      = 0;
 static uint32_t beaconInterval = 0;
 static uint32_t lastBeaconTime = 0;
-
-// Sniff-mode periodic RSSI reporting
 static uint32_t lastSniffStatus = 0;
 static bool     meshDecodeHint = false;
 
-// Analyzer-mode state
 static uint32_t analyzeStartHz   = 0;
 static uint32_t analyzeEndHz     = 0;
 static uint32_t analyzeStepHz    = 0;
@@ -56,7 +38,6 @@ static int16_t  analyzeHoldPeakRssi = -200;
 static uint32_t analyzeHoldPeakFreq = 0;
 static const uint16_t ANALYZE_MAX_BINS = 96;
 
-// Chat mode state
 static bool     chatJoined = false;
 static uint8_t  chatRoomId = 0;
 static char     chatNick[13] = "node";
@@ -79,14 +60,12 @@ struct ChatPeerState {
 
 static ChatPeerState chatPeers[CHAT_MAX_PEERS];
 
-// LED pin
 #define LED_PIN PC13
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  Utility Helpers
 // ═════════════════════════════════════════════════════════════════════════════
 
-/** Print a hex dump of data with ASCII sidebar (16 bytes per row) */
 static void hexDump(const uint8_t* data, uint8_t len) {
     char tmp[8];
     for (uint16_t i = 0; i < len; i += 16) {
@@ -241,7 +220,6 @@ static bool displayMeshtasticLite(const uint8_t* data, uint8_t len) {
     return true;
 }
 
-/** Convert a single hex character to its numeric value (0-15), or 0xFF on error */
 static uint8_t hexNibble(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -249,7 +227,6 @@ static uint8_t hexNibble(char c) {
     return 0xFF;
 }
 
-/** Print the prompt character */
 static void prompt() {
     if (appMode == MODE_IDLE) Serial1.print("\n> ");
 }
@@ -380,7 +357,6 @@ static bool parseHexFlexible(const char* s, uint8_t out[16]) {
         tmp[i] = (uint8_t)((hi << 4) | lo);
     }
 
-    // Stretch/compress provided key bytes to 16 bytes deterministically.
     for (uint8_t i = 0; i < 16; i++) {
         out[i] = tmp[i % bytes] ^ (uint8_t)(0xA5 + i * 11);
     }
@@ -529,7 +505,6 @@ static bool parseChatPacket(const uint8_t* in, uint8_t len, char* nickOut, uint8
     return true;
 }
 
-/** Apply built-in analyzer presets by ISM band label */
 static bool applyAnalyzePreset(const char* preset, uint32_t& startHz, uint32_t& endHz, uint32_t& stepHz) {
     if (strcasecmp(preset, "433") == 0) {
         startHz = 430000000UL; endHz = 440000000UL; stepHz = 50000UL; return true;
@@ -543,7 +518,6 @@ static bool applyAnalyzePreset(const char* preset, uint32_t& startHz, uint32_t& 
     return false;
 }
 
-/** Parse analyzer args. Default: +/-1 MHz around current frequency, 25 kHz step. */
 static bool parseAnalyzeArgs(const char* arg, uint32_t& startHz, uint32_t& endHz, uint32_t& stepHz) {
     if (*arg == '\0') {
         uint32_t center = radio.getConfig().frequencyHz;
@@ -578,7 +552,6 @@ static bool parseAnalyzeArgs(const char* arg, uint32_t& startHz, uint32_t& endHz
     return (stepHz > 0);
 }
 
-/** Render one live analyzer frame to terminal using ANSI cursor control. */
 static void renderAnalyzeFrame() {
     const uint16_t maxBins = ANALYZE_MAX_BINS;
 
@@ -676,7 +649,6 @@ static void renderAnalyzeFrame() {
 //  Sniff-Mode Packet Display
 // ═════════════════════════════════════════════════════════════════════════════
 
-/** Pretty-print a received packet with full metadata */
 static void displayPacket(const PacketInfo& pkt) {
     float snrDb = (float)pkt.snr / 4.0f;
 
@@ -698,7 +670,6 @@ static void displayPacket(const PacketInfo& pkt) {
         Serial1.println("  --- Hex Dump ---");
         hexDump(pkt.data, pkt.length);
 
-        // If the data looks like printable ASCII, show it as text
         bool printable = true;
         for (uint8_t i = 0; i < pkt.length && printable; i++)
             if (pkt.data[i] < 0x20 && pkt.data[i] != '\n' && pkt.data[i] != '\r')
@@ -722,7 +693,6 @@ static void displayPacket(const PacketInfo& pkt) {
 //  Command Handlers
 // ═════════════════════════════════════════════════════════════════════════════
 
-/** Print all available commands */
 static void cmdHelp() {
     Serial1.println();
     Serial1.println("================ LoRa Tool Help ================");
@@ -763,13 +733,11 @@ static void cmdHelp() {
     Serial1.println("Tips: <cmd> -help, Ctrl+C/q stop modes, Ctrl+L clear");
 }
 
-/** Send a text message */
 static void cmdSend(const char* arg) {
     uint8_t len = strlen(arg);
     if (len == 0) { Serial1.println("[ERR] Usage: send <message>"); return; }
     if (len > 255) { Serial1.println("[ERR] Message too long (max 255)"); return; }
 
-    // Pause sniff mode temporarily if active
     bool resume = (appMode == MODE_SNIFFING);
 
     Serial1.print("[TX] Sending "); Serial1.print(len); Serial1.println(" bytes...");
@@ -787,20 +755,17 @@ static void cmdSend(const char* arg) {
         Serial1.println("[TX] FAILED (timeout)");
     }
 
-    // Resume sniff if it was active
     if (resume) {
         radio.startReceive();
         Serial1.println("[RX] Sniff resumed");
     }
 }
 
-/** Send raw hex bytes */
 static void cmdSendHex(const char* arg) {
     uint8_t buf[255];
     uint8_t len = 0;
 
     while (*arg && len < 255) {
-        // Skip whitespace
         while (*arg == ' ') arg++;
         if (!*arg) break;
 
@@ -837,7 +802,6 @@ static void cmdSendHex(const char* arg) {
     }
 }
 
-/** Enter sniff (continuous receive) mode */
 static void cmdSniff() {
     if (appMode == MODE_BEACONING) {
         appMode = MODE_IDLE;
@@ -858,13 +822,10 @@ static void cmdSniff() {
     Serial1.println("  (type 'stop' to exit)");
 }
 
-/** Start / stop beacon mode */
 static void cmdBeacon(const char* arg) {
-    // Parse interval
     char* end = nullptr;
     uint32_t interval = strtoul(arg, &end, 10);
 
-    // Stop beacon if interval is 0
     if (interval == 0) {
         if (appMode == MODE_BEACONING) {
             appMode = MODE_IDLE;
@@ -876,14 +837,11 @@ static void cmdBeacon(const char* arg) {
         return;
     }
 
-    // Skip whitespace after interval number
     while (*end == ' ') end++;
     if (*end == '\0') { Serial1.println("[ERR] Usage: beacon <ms> <message>"); return; }
 
-    // Stop any active mode
     if (appMode == MODE_SNIFFING) radio.goStandby();
 
-    // Store beacon config
     beaconInterval = interval;
     beaconLen = strlen(end);
     if (beaconLen > 255) beaconLen = 255;
@@ -891,7 +849,7 @@ static void cmdBeacon(const char* arg) {
     beaconMsg[beaconLen] = '\0';
 
     appMode = MODE_BEACONING;
-    lastBeaconTime = 0;  // Send immediately on first loop
+    lastBeaconTime = 0;
 
     Serial1.print("[BEACON] Sending \"");
     Serial1.print(beaconMsg);
@@ -900,7 +858,6 @@ static void cmdBeacon(const char* arg) {
     Serial1.println(" ms");
 }
 
-/** Stop any active mode and go idle */
 static void cmdStop() {
     radio.goStandby();
 
@@ -922,7 +879,6 @@ static void cmdStop() {
     appMode = MODE_IDLE;
 }
 
-/** Set frequency from a MHz string (supports decimals like 433.125) */
 static void cmdFreq(const char* arg) {
     float mhz = atof(arg);
     if (mhz < 150.0f || mhz > 960.0f) {
@@ -936,7 +892,6 @@ static void cmdFreq(const char* arg) {
     Serial1.println(" MHz");
 }
 
-/** Set spreading factor */
 static void cmdSF(const char* arg) {
     int sf = atoi(arg);
     if (sf < 5 || sf > 12) {
@@ -947,7 +902,6 @@ static void cmdSF(const char* arg) {
     Serial1.print("[CFG] Spreading Factor: SF"); Serial1.println(sf);
 }
 
-/** Set bandwidth from kHz value */
 static void cmdBW(const char* arg) {
     float kHz = atof(arg);
     uint8_t code = SX1262Radio::bwFromKHz(kHz);
@@ -956,7 +910,6 @@ static void cmdBW(const char* arg) {
     Serial1.println(SX1262Radio::bwToStr(code));
 }
 
-/** Set coding rate (user gives denominator 5-8 → 4/5 .. 4/8) */
 static void cmdCR(const char* arg) {
     int cr = atoi(arg);
     if (cr < 5 || cr > 8) {
@@ -967,7 +920,6 @@ static void cmdCR(const char* arg) {
     Serial1.print("[CFG] Coding Rate: 4/"); Serial1.println(cr);
 }
 
-/** Set TX power in dBm */
 static void cmdPower(const char* arg) {
     int p = atoi(arg);
     if (p < -9 || p > 22) {
@@ -978,7 +930,6 @@ static void cmdPower(const char* arg) {
     Serial1.print("[CFG] TX Power: "); Serial1.print(p); Serial1.println(" dBm");
 }
 
-/** Set preamble length */
 static void cmdPreamble(const char* arg) {
     int n = atoi(arg);
     if (n < 1 || n > 65535) {
@@ -989,7 +940,6 @@ static void cmdPreamble(const char* arg) {
     Serial1.print("[CFG] Preamble: "); Serial1.print(n); Serial1.println(" symbols");
 }
 
-/** Enable / disable CRC */
 static void cmdCrc(const char* arg) {
     if (strcasecmp(arg, "on") == 0) {
         radio.setCrc(true);
@@ -1002,7 +952,6 @@ static void cmdCrc(const char* arg) {
     }
 }
 
-/** Set IQ polarity */
 static void cmdIQ(const char* arg) {
     if (strcasecmp(arg, "normal") == 0) {
         radio.setIqInverted(false);
@@ -1015,7 +964,6 @@ static void cmdIQ(const char* arg) {
     }
 }
 
-/** Set LoRa sync word (hex byte) */
 static void cmdSyncWord(const char* arg) {
     uint8_t sw = (uint8_t)strtoul(arg, nullptr, 16);
     if (sw == 0 && arg[0] != '0') {
@@ -1031,7 +979,6 @@ static void cmdSyncWord(const char* arg) {
     else                 Serial1.println();
 }
 
-/** Configure Meshtastic-like PHY presets and start passive sniffing. */
 static void cmdMeshListen(const char* arg) {
     char preset[16] = {};
     const char* p = arg;
@@ -1110,7 +1057,6 @@ static void cmdMeshListen(const char* arg) {
     cmdSniff();
 }
 
-/** Set header mode (explicit/implicit) and optional implicit length */
 static void cmdHeader(const char* arg) {
     if (strncasecmp(arg, "explicit", 8) == 0) {
         radio.setHeaderImplicit(false);
@@ -1139,7 +1085,6 @@ static void cmdHeader(const char* arg) {
     Serial1.println("[ERR] Usage: header <explicit|implicit [len]>");
 }
 
-/** Set low data-rate optimization mode */
 static void cmdLdro(const char* arg) {
     if (strcasecmp(arg, "auto") == 0) {
         radio.setLdroMode(LDRO_AUTO);
@@ -1155,7 +1100,6 @@ static void cmdLdro(const char* arg) {
     }
 }
 
-/** Set LoRa symbol timeout (0-255 symbols, 0 disables) */
 static void cmdSymTimeout(const char* arg) {
     int n = atoi(arg);
     if (n < 0 || n > 255) {
@@ -1167,7 +1111,6 @@ static void cmdSymTimeout(const char* arg) {
     Serial1.println(n);
 }
 
-/** Set RX gain mode */
 static void cmdRxBoost(const char* arg) {
     if (strcasecmp(arg, "on") == 0) {
         radio.setRxBoosted(true);
@@ -1180,7 +1123,6 @@ static void cmdRxBoost(const char* arg) {
     }
 }
 
-/** Set standby source clock */
 static void cmdStandby(const char* arg) {
     if (strcasecmp(arg, "xosc") == 0) {
         radio.setStandbyXosc(true);
@@ -1193,7 +1135,6 @@ static void cmdStandby(const char* arg) {
     }
 }
 
-/** Set regulator mode */
 static void cmdRegulator(const char* arg) {
     if (strcasecmp(arg, "dcdc") == 0) {
         radio.setRegulatorDcdc(true);
@@ -1206,7 +1147,6 @@ static void cmdRegulator(const char* arg) {
     }
 }
 
-/** Select active modem (lora/gfsk) */
 static void cmdModem(const char* arg) {
     if (strcasecmp(arg, "lora") == 0) {
         radio.setModem(MODEM_LORA);
@@ -1219,7 +1159,6 @@ static void cmdModem(const char* arg) {
     }
 }
 
-/** Set GFSK bitrate in bps */
 static void cmdBitrate(const char* arg) {
     uint32_t bps = (uint32_t)strtoul(arg, nullptr, 10);
     if (bps < 600 || bps > 300000) {
@@ -1231,7 +1170,6 @@ static void cmdBitrate(const char* arg) {
     Serial1.println(bps);
 }
 
-/** Set GFSK frequency deviation in Hz */
 static void cmdFdev(const char* arg) {
     uint32_t hz = (uint32_t)strtoul(arg, nullptr, 10);
     if (hz < 100 || hz > 200000) {
@@ -1243,7 +1181,6 @@ static void cmdFdev(const char* arg) {
     Serial1.println(hz);
 }
 
-/** Set GFSK RX bandwidth code (datasheet code byte) */
 static void cmdFskBw(const char* arg) {
     uint8_t code = (uint8_t)strtoul(arg, nullptr, 16);
     radio.setGfskBw(code);
@@ -1252,7 +1189,6 @@ static void cmdFskBw(const char* arg) {
     Serial1.println(code, HEX);
 }
 
-/** Set GFSK whitening */
 static void cmdWhitening(const char* arg) {
     if (strcasecmp(arg, "on") == 0) {
         radio.setGfskWhitening(true);
@@ -1380,7 +1316,6 @@ static void cmdChatSend(const char* arg) {
     if (wasChat) radio.startReceive();
 }
 
-/** Display full radio configuration summary */
 static void cmdStatus() {
     const LoRaConfig& c = radio.getConfig();
     Serial1.println();
@@ -1466,7 +1401,6 @@ static void cmdStatus() {
         Serial1.println(c.gfskWhiteningOn ? "ON" : "OFF");
     }
 
-    // Current state
     Serial1.print("| State:       ");
     switch (appMode) {
         case MODE_IDLE:      Serial1.println("IDLE");      break;
@@ -1476,7 +1410,6 @@ static void cmdStatus() {
         case MODE_CHAT:      Serial1.println("CHAT");      break;
     }
 
-    // Stats
     Serial1.print("| Packets RX:  ");
     Serial1.println(radio.getPacketCount());
     Serial1.print("| CRC Errors:  ");
@@ -1485,13 +1418,11 @@ static void cmdStatus() {
     Serial1.println("+----------------------------------------------+");
 }
 
-/** Read and display current RSSI */
 static void cmdRssi() {
     int16_t rssi = radio.readRssi();
     Serial1.print("[RSSI] "); Serial1.print(rssi); Serial1.println(" dBm");
 }
 
-/** Perform full radio reset and re-initialisation */
 static void cmdReset() {
     appMode = MODE_IDLE;
     uint32_t freq = radio.getConfig().frequencyHz;
@@ -1503,12 +1434,10 @@ static void cmdReset() {
 //  New System Commands
 // ═════════════════════════════════════════════════════════════════════════════
 
-/** Clear terminal screen using ANSI escape codes */
 static void cmdClear() {
     Serial1.print("\033[2J\033[H");
 }
 
-/** Show time since last reset, formatted as days/hours/minutes/seconds */
 static void cmdUptime() {
     uint32_t ms  = millis();
     uint32_t sec = ms / 1000;
@@ -1522,7 +1451,6 @@ static void cmdUptime() {
     Serial1.print(sec % 60);  Serial1.println("s");
 }
 
-/** Show firmware version, build date, and hardware details */
 static void cmdVersion() {
     Serial1.println();
     Serial1.println("+-------------- System Info -----------------+");
@@ -1530,13 +1458,12 @@ static void cmdVersion() {
     Serial1.print(  "| Built:       "); Serial1.print(__DATE__); Serial1.print(" "); Serial1.println(__TIME__);
     Serial1.println("| MCU:         STM32F103C8T6");
     Serial1.print(  "| Clock:       "); Serial1.print(SystemCoreClock / 1000000); Serial1.println(" MHz");
-    Serial1.println("| Radio:       SX1262 (DX-LR30)");
+    Serial1.println("| Radio:       SX1262 (DX-LR20)");
     Serial1.println("| SPI:         SPI1 (PA5/PA6/PA7)");
     Serial1.println("| Serial:      UART1 (PA9/PA10) 115200");
     Serial1.println("+----------------------------------------------+");
 }
 
-/** Put radio into low-power standby and stop active modes */
 static void cmdSleep() {
     if (appMode != MODE_IDLE) {
         radio.goStandby();
@@ -1547,7 +1474,6 @@ static void cmdSleep() {
     Serial1.println("        Use 'reset' to re-init or any TX/RX command to resume.");
 }
 
-/** Software reset the entire MCU */
 static void cmdReboot() {
     Serial1.println("[REBOOT] Resetting MCU...");
     Serial1.flush();
@@ -1559,11 +1485,6 @@ static void cmdReboot() {
 //  Frequency Scanner
 // ═════════════════════════════════════════════════════════════════════════════
 
-/**
- * Scan a frequency range, reading RSSI at each step.
- * On channels with signal (> -100 dBm), briefly listens for packets.
- * Returns false if the user aborted with Ctrl+C or 'q'.
- */
 static bool scanFreqRange(float startMHz, float endMHz, float stepKHz,
                           const char* label) {
     uint32_t startHz = (uint32_t)(startMHz * 1e6f);
@@ -1575,7 +1496,6 @@ static bool scanFreqRange(float startMHz, float endMHz, float stepKHz,
     uint16_t activeCount = 0;
     uint16_t totalSteps  = 0;
 
-    // Band header
     Serial1.println();
     Serial1.print("--- "); Serial1.print(label);
     Serial1.print("  ");   Serial1.print(startMHz, 1);
@@ -1586,7 +1506,6 @@ static bool scanFreqRange(float startMHz, float endMHz, float stepKHz,
     Serial1.println("  ----------  ------  --------------------");
 
     for (uint32_t freq = startHz; freq <= endHz; freq += stepHz) {
-        // Allow user abort: Ctrl+C or 'q'
         if (Serial1.available()) {
             char c = Serial1.peek();
             if (c == 0x03 || c == 'q' || c == 'Q') {
@@ -1598,25 +1517,21 @@ static bool scanFreqRange(float startMHz, float endMHz, float stepKHz,
 
         totalSteps++;
 
-        // Tune to frequency, enter RX, wait for PLL lock + RSSI settle
         radio.setFrequency(freq);
         radio.startReceive();
         delayMicroseconds(800);
 
         int16_t rssi = radio.readRssi();
 
-        // Track the strongest signal found
         if (rssi > peakRssi) { peakRssi = rssi; peakFreq = freq; }
 
         bool active = (rssi > -100);
         if (active) activeCount++;
 
-        // Visual bar: map -130..-30 dBm to 0..20 '#' characters
         int bar = (rssi + 130) / 5;
         if (bar < 0)  bar = 0;
         if (bar > 20) bar = 20;
 
-        // Print one line per frequency step
         Serial1.print("  ");
         Serial1.print(freq / 1e6f, 3);
         Serial1.print("   ");
@@ -1628,7 +1543,6 @@ static bool scanFreqRange(float startMHz, float endMHz, float stepKHz,
         if (active) Serial1.print("  << SIGNAL");
         Serial1.println();
 
-        // On active channels, listen briefly for a real packet (50 ms)
         if (active) {
             PacketInfo pkt;
             uint32_t listenStart = millis();
@@ -1650,7 +1564,6 @@ static bool scanFreqRange(float startMHz, float endMHz, float stepKHz,
         radio.goStandby();
     }
 
-    // Band summary
     Serial1.print("  >> Peak: ");
     Serial1.print(peakFreq / 1e6f, 3);
     Serial1.print(" MHz @ ");
@@ -1661,16 +1574,9 @@ static bool scanFreqRange(float startMHz, float endMHz, float stepKHz,
     return true;
 }
 
-/**
- * Full frequency scan command.
- * Default (no args): scans ISM 433 / 868 / 915 MHz bands.
- * Custom range:      scan <startMHz> <endMHz> [stepKHz]
- */
 static void cmdScan(const char* arg) {
-    // Save current frequency so we can restore it afterwards
     uint32_t savedFreq = radio.getConfig().frequencyHz;
 
-    // Stop any active mode before scanning
     if (appMode != MODE_IDLE) {
         radio.goStandby();
         appMode = MODE_IDLE;
@@ -1695,17 +1601,15 @@ static void cmdScan(const char* arg) {
     } else if (strcasecmp(arg, "915") == 0) {
         completed = scanFreqRange(902.0f, 928.0f, 250.0f, "ISM 915 MHz");
     } else {
-        // Parse: scan <startMHz> <endMHz> [stepKHz]
         char* p1;
         float startMHz = strtof(arg, &p1);
         while (*p1 == ' ') p1++;
         char* p2;
         float endMHz = strtof(p1, &p2);
         while (*p2 == ' ') p2++;
-        float stepKHz = 200.0f;   // default step if omitted
+        float stepKHz = 200.0f;
         if (*p2 != '\0') stepKHz = strtof(p2, nullptr);
 
-        // Validate
         if (startMHz < 150.0f || endMHz > 960.0f ||
             startMHz >= endMHz || stepKHz < 1.0f) {
             Serial1.println("[ERR] Usage: scan <startMHz> <endMHz> [stepKHz]");
@@ -1725,14 +1629,12 @@ static void cmdScan(const char* arg) {
     Serial1.print(elapsed);
     Serial1.println(" ms");
 
-    // Restore the original operating frequency
     radio.setFrequency(savedFreq);
     Serial1.print("[SCAN] Restored freq: ");
     Serial1.print(savedFreq / 1e6f, 3);
     Serial1.println(" MHz");
 }
 
-/** Quick preset scan command for ISM bands */
 static void cmdScanPreset(const char* arg) {
     if (*arg == '\0') {
         Serial1.println("[ERR] Usage: scanpreset <433|868|915|all>");
@@ -1741,7 +1643,6 @@ static void cmdScanPreset(const char* arg) {
     cmdScan(arg);
 }
 
-/** Enter live analyzer mode (redrawn RSSI graph in terminal). */
 static void cmdAnalyze(const char* arg) {
     uint32_t startHz = 0, endHz = 0, stepHz = 0;
     if (!parseAnalyzeArgs(arg, startHz, endHz, stepHz)) {
@@ -1763,7 +1664,6 @@ static void cmdAnalyze(const char* arg) {
     appMode = MODE_ANALYZE;
 }
 
-/** Configure analyzer options: peak/threshold */
 static void cmdAnalyzeCfg(const char* arg) {
     char key[16] = {};
     char val[16] = {};
@@ -1795,7 +1695,6 @@ static void cmdAnalyzeCfg(const char* arg) {
 //  Per-Command Help System
 // ═════════════════════════════════════════════════════════════════════════════
 
-/** Show detailed help for a specific command */
 static void showCmdHelp(const char* cmd) {
     Serial1.println();
     if (strcasecmp(cmd, "send") == 0) {
@@ -1935,29 +1834,24 @@ static void showCmdHelp(const char* cmd) {
 //  Command Router
 // ═════════════════════════════════════════════════════════════════════════════
 
-/** Parse a line of serial input and route to the appropriate handler */
 static void processCommand(char* line) {
     char originalLine[sizeof(cmdBuf)] = {};
     strncpy(originalLine, line, sizeof(originalLine) - 1);
 
-    // Skip leading whitespace
     while (*line == ' ') line++;
     if (*line == '\0') return;
 
-    // Split into command and argument at the first space
     char* arg = line;
     while (*arg && *arg != ' ') arg++;
-    if (*arg) { *arg = '\0'; arg++; }   // Null-terminate command word
-    while (*arg == ' ') arg++;           // Skip spaces before argument
+    if (*arg) { *arg = '\0'; arg++; }
+    while (*arg == ' ') arg++;
 
-    // Check for -help / --help / -h flag on any command
     if (strcmp(arg, "-help") == 0 || strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
         showCmdHelp(line);
         prompt();
         return;
     }
 
-    // Dispatch to the correct handler (case-insensitive)
     if      (strcasecmp(line, "help")     == 0) cmdHelp();
     else if (strcasecmp(line, "send")     == 0) cmdSend(arg);
     else if (strcasecmp(line, "sendhex")  == 0) cmdSendHex(arg);
@@ -1997,7 +1891,6 @@ static void processCommand(char* line) {
     else if (strcasecmp(line, "chatnick") == 0) cmdChatNick(arg);
     else if (strcasecmp(line, "chat") == 0) cmdChatSend(arg);
     else if (strcasecmp(line, "chatstatus") == 0) cmdChatStatus();
-    // System commands
     else if (strcasecmp(line, "clear")    == 0) cmdClear();
     else if (strcasecmp(line, "cls")      == 0) cmdClear();
     else if (strcasecmp(line, "uptime")   == 0) cmdUptime();
@@ -2018,12 +1911,10 @@ static void processCommand(char* line) {
     prompt();
 }
 
-/** Read incoming serial characters and build up a command line */
 static void readSerial() {
     while (Serial1.available()) {
         char c = Serial1.read();
 
-        // Newline → process the accumulated line
         if (c == '\n' || c == '\r') {
             if (cmdLen > 0) {
                 cmdBuf[cmdLen] = '\0';
@@ -2031,7 +1922,6 @@ static void readSerial() {
                 cmdLen = 0;
             }
         }
-        // Ctrl+C → stop active mode
         else if (c == 0x03) {
             if (appMode != MODE_IDLE) {
                 Serial1.println("^C");
@@ -2044,28 +1934,24 @@ static void readSerial() {
                 prompt();
             }
         }
-        // Quick analyzer stop with q
         else if ((c == 'q' || c == 'Q') && appMode == MODE_ANALYZE) {
             cmdStop();
             cmdLen = 0;
             prompt();
         }
-        // Ctrl+L → clear screen
         else if (c == 0x0C) {
             Serial1.print("\033[2J\033[H");
             prompt();
         }
-        // Backspace handling
         else if (c == '\b' || c == 0x7F) {
             if (cmdLen > 0) {
                 cmdLen--;
-                Serial1.print("\b \b");  // Erase character on terminal
+                Serial1.print("\b \b");
             }
         }
-        // Normal character → append to buffer
         else if (cmdLen < sizeof(cmdBuf) - 1) {
             cmdBuf[cmdLen++] = c;
-            Serial1.print(c);  // Echo
+            Serial1.print(c);
         }
     }
 }
@@ -2075,29 +1961,24 @@ static void readSerial() {
 // ═════════════════════════════════════════════════════════════════════════════
 
 void setup() {
-    // LED setup — immediate visual feedback
     pinMode(LED_PIN, OUTPUT);
-    digitalWrite(LED_PIN, HIGH);    // OFF (active low)
+    digitalWrite(LED_PIN, HIGH);
 
-    // Brief startup blink to confirm firmware is running
     for (int i = 0; i < 2; i++) {
-        digitalWrite(LED_PIN, LOW);  delay(80);   // ON
-        digitalWrite(LED_PIN, HIGH); delay(80);   // OFF
+        digitalWrite(LED_PIN, LOW);  delay(80);
+        digitalWrite(LED_PIN, HIGH); delay(80);
     }
 
-    // Serial port (UART1: PA9=TX, PA10=RX)
     Serial1.begin(115200);
     delay(200);
 
-    // Welcome banner
     Serial1.println("\n\n");
     Serial1.println("+=============================================+");
     Serial1.println("|  STM32 LoRa Terminal  v1.0                  |");
-    Serial1.println("|  SX1262 (DX-LR30) @ "); Serial1.print(SystemCoreClock / 1000000); Serial1.println(" MHz        |");
+    Serial1.println("|  SX1262 (DX-LR20) @ "); Serial1.print(SystemCoreClock / 1000000); Serial1.println(" MHz        |");
     Serial1.println("|  Type 'help' for commands                   |");
     Serial1.println("+=============================================+");
 
-    // Initialise the radio with default frequency
     Serial1.println("[INIT] Starting radio...");
     if (!radio.begin(915000000)) {
         Serial1.println("[ERR] Radio init failed!  Halting.");
@@ -2109,7 +1990,6 @@ void setup() {
     Serial1.println("[INIT] Radio OK!");
     chatSenderId = deviceId16();
 
-    // Brief LED flash to show we're alive
     digitalWrite(LED_PIN, LOW);  delay(200);
     digitalWrite(LED_PIN, HIGH);
 
@@ -2117,20 +1997,16 @@ void setup() {
 }
 
 void loop() {
-    // ── Always process serial input ─────────────────────────────────────────
     readSerial();
 
-    // ── Sniff mode: poll for packets and print periodic status ──────────────
     if (appMode == MODE_SNIFFING) {
         PacketInfo pkt;
         if (radio.checkForPacket(pkt)) {
-            // Brief LED blink on packet
             digitalWrite(LED_PIN, LOW);
             displayPacket(pkt);
             digitalWrite(LED_PIN, HIGH);
         }
 
-        // Print an activity heartbeat every 10 seconds if no packets
         if (millis() - lastSniffStatus >= 10000) {
             lastSniffStatus = millis();
             Serial1.print("[SNIFF] ");
@@ -2142,7 +2018,6 @@ void loop() {
         }
     }
 
-    // ── Beacon mode: periodic transmit ──────────────────────────────────────
     if (appMode == MODE_BEACONING && millis() - lastBeaconTime >= beaconInterval) {
         lastBeaconTime = millis();
         digitalWrite(LED_PIN, LOW);
@@ -2164,13 +2039,11 @@ void loop() {
         }
     }
 
-    // ── Analyze mode: redraw live graph periodically ───────────────────────
     if (appMode == MODE_ANALYZE && millis() - lastAnalyzeFrame >= 350) {
         lastAnalyzeFrame = millis();
         renderAnalyzeFrame();
     }
 
-    // ── Chat mode: receive encrypted chat packets ──────────────────────────
     if (appMode == MODE_CHAT) {
         PacketInfo pkt;
         if (radio.checkForPacket(pkt)) {
@@ -2197,6 +2070,5 @@ void loop() {
         }
     }
 
-    // Small yield to avoid tight-loop starvation
     delay(1);
 }
