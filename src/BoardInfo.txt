@@ -1,0 +1,52 @@
+================================================================================
+STM32F103C8 Blue Pill + DX-LR30 (SX1262) LoRa Module
+Board Pin Configuration and Mapping
+================================================================================
+
+AVAILABLE GPIO PINS:
+--------------------------------------------------------------------------------
+PC13, PC14, PC15
+PA0, PA1, PA2, PA3, PA4, PA5, PA6, PA7, PA8, PA9, PA10, PA11, PA12, PA15
+PB0, PB1, PB3, PB4, PB5, PB6, PB7, PB8, PB9, PB10, PB11, PB12, PB13, PB14, PB15
+
+
+SPI1 CONFIGURATION (Connected to DX-LR30 LoRa Module):
+--------------------------------------------------------------------------------
+Pin #   GPIO    Function    Description
+--------------------------------------------------------------------------------
+9       PA4     NSS         Chip Select (Module Slave Select)
+10      PA5     SCK         SPI Clock
+11      PA6     MISO        Master In Slave Out (Data from module)
+12      PA7     MOSI        Master Out Slave In (Data to module)
+
+
+UART1 CONFIGURATION (Programming & Debug Serial):
+--------------------------------------------------------------------------------
+Pin #   GPIO    Function    Description
+--------------------------------------------------------------------------------
+29      PA9     TX          Serial Transmit (to USB-Serial adapter RX)
+30      PA10    RX          Serial Receive (from USB-Serial adapter TX)
+
+
+POWER PINS:
+--------------------------------------------------------------------------------
+Pin #   Function    Description
+--------------------------------------------------------------------------------
+18, 23  GND         Ground (connect to module GND and USB-Serial GND)
+21      +5V         5V Power Supply (can power board via this pin)
+
+
+ONBOARD COMPONENTS:
+--------------------------------------------------------------------------------
+PC13    Built-in LED (Active LOW - LOW=ON, HIGH=OFF)
+
+
+NOTES:
+--------------------------------------------------------------------------------
+- DX-LR30 module uses SX1262 chip (not SX1276!)
+- Module may have RESET and BUSY pins internally tied - not exposed
+- Use 3.3V logic levels for all GPIO (STM32 is 3.3V, not 5V tolerant on all pins)
+- Serial programming requires BOOT0 button held during reset to enter bootloader
+- After programming, just press RESET to run the uploaded program
+
+================================================================================
