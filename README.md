@@ -1,7 +1,7 @@
 # STM32 LoRa Terminal
 
 A feature-rich serial CLI firmware for **STM32F103C8 "Blue Pill"** + **SX1262 LoRa radio** (DX-LR30 module), turning cheap hardware into a versatile LoRa tool with packet sniffing, spectrum analysis, encrypted chat, Meshtastic monitoring, and full on-the-fly radio configuration — all from a serial terminal.
-<img src="https://github.com/NeutralSystem/STM32_DX-LR20_LORA/blob/main/STM32DXLR20.png" alt="Diagram" width="600" />
+<img src="https://github.com/NeutralSystem/STM32_DX-LR20_LORA/blob/main/STM32DXLR20.png" alt="Diagram" width="50" />
 ![Platform](https://img.shields.io/badge/platform-STM32F103C8-blue)
 ![Radio](https://img.shields.io/badge/radio-SX1262-green)
 ![Framework](https://img.shields.io/badge/framework-Arduino%20%2B%20PlatformIO-orange)
