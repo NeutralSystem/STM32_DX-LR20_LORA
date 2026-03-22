@@ -4,4 +4,10 @@
 .vscode/launch.json
 .vscode/ipch
 flipper_app
-
+Flipper_Zero_Lora_Terminal\lora_terminal
+Flipper_Zero_Lora_Terminal/lora_terminal
+Flipper_Zero_Lora_Terminal/*.elf
+Flipper_Zero_Lora_Terminal/*.elf.map
+Flipper_Zero_Lora_Terminal/*.impsyms
+build_flipper_app.bat
+build_flipper_app.sh
