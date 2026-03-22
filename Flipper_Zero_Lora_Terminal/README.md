@@ -26,41 +26,17 @@ A **Flipper Zero application** (.fap) that turns the Flipper into a full-feature
 
 ## Installation
 
-### Pre-Built (Easiest)
-
-1. Copy **`lora_terminal.fap`** from this folder to your Flipper Zero SD card:
+1. Download **`lora_terminal.fap`** from this folder.
+2. Copy it to your Flipper Zero SD card:
    ```
    SD Card/apps/GPIO/lora_terminal.fap
    ```
-2. On the Flipper, navigate to **Apps → GPIO → LoRa Terminal**.
+3. On the Flipper, navigate to **Apps → GPIO → LoRa Terminal**.
 
 You can copy the file using:
 - **qFlipper** (desktop app — drag and drop)
 - **Flipper Zero mobile app** (File Manager)
 - **Direct SD card access** (pop the micro SD and use a reader)
-
-### Build From Source
-
-If you want to build it yourself (or modify the code):
-
-```bash
-# 1. Clone the Flipper Zero firmware (with submodules)
-git clone --recursive https://github.com/flipperdevices/flipperzero-firmware.git
-cd flipperzero-firmware
-
-# 2. Copy the app source into the firmware tree
-#    (copy the flipper_app folder from this repo)
-cp -r /path/to/STM32_DX-LR20_LORA/flipper_app applications_user/lora_terminal
-
-# 3. Build the FAP
-./fbt fap_lora_terminal        # Linux/macOS
-.\fbt.cmd fap_lora_terminal    # Windows
-
-# 4. The built .fap will be at:
-#    build/f7-firmware-D/.extapps/lora_terminal.fap
-```
-
-> **Note**: The firmware toolchain (~700 MB) downloads automatically on first build. This is a one-time setup.
 
 ---
 
@@ -205,27 +181,6 @@ When you launch the app, you'll see six options:
 - **Range check**: Use low SF and high BW for close-range speed, high SF and low BW for maximum range.
 - **Packet sniffing**: Both sides must use the same frequency, SF, BW, CR, and sync word to see each other's packets.
 - **Power draw**: At +22 dBm, the radio draws ~120 mA during TX. Lower the TX power if you need to conserve Flipper battery.
-
----
-
-## Source File Structure
-
-```
-flipper_app/
-├── application.fam          # App manifest (name, category, icon, entry point)
-├── lora_terminal.h          # Shared types, enums, and function declarations
-├── lora_terminal_app.c      # Entry point — app alloc/free, scene wiring
-├── uart_bridge.c            # UART init/deinit, send, receive, buffer management
-├── icons/
-│   └── lora_10px.png        # App icon (10×10 1-bit PNG)
-└── scenes/
-    ├── scene_main_menu.c    # Main menu (6 items)
-    ├── scene_send.c         # Text input → transmit
-    ├── scene_sniff.c        # Continuous packet receiver
-    ├── scene_scan.c         # Frequency band scanner
-    ├── scene_config.c       # Radio parameter editor
-    └── scene_chat.c         # Encrypted chat room
-```
 
 ---
 
