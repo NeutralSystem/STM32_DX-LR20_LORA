@@ -1,9 +1,0 @@
-#include "lora_terminal_icons.h"
-
-#include <gui/icon_i.h>
-
-const uint8_t _I_lora_10px_0[] = {0x01,0x00,0x0e,0x00,0xe3,0xc0,0xf7,0x70,0x3e,0xf8,0x06,0x3d,0xf0,0x3f,0xbc,0x0f,0xf7,0x03,};
-const uint8_t* const _I_lora_10px[] = {_I_lora_10px_0};
-
-const Icon I_lora_10px = {.width=10,.height=10,.frame_count=1,.frame_rate=0,.frames=_I_lora_10px};
-
