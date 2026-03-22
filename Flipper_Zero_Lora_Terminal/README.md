@@ -40,6 +40,11 @@ You can copy the file using:
 
 ---
 
+## Project Picture
+
+|------Coming-----| :)
+
+
 ## Wiring — Flipper Zero to DX-LR20 Board
 
 Only **3 wires** are needed. Both devices operate at **3.3V logic** — no level shifter required.
