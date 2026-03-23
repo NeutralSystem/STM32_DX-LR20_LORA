@@ -47,11 +47,11 @@ You can copy the file using:
 ### Simplest Flipper module possible.
 #### Front
 
-<img src="https://github.com/NeutralSystem/STM32_DX-LR20_LORA/blob/main/Flipper_Zero_Lora_Terminal/FlipperPic/LoraFlipper1.png" alt="Diagram" width="150" />
+<img src="https://github.com/NeutralSystem/STM32_DX-LR20_LORA/blob/main/Flipper_Zero_Lora_Terminal/FlipperPic/LoraFlipper1.png" alt="Diagram" width="200" />
 
 #### Back
 
-<img src="https://github.com/NeutralSystem/STM32_DX-LR20_LORA/blob/main/Flipper_Zero_Lora_Terminal/FlipperPic/LoraFlipper2.png" alt="Diagram" width="150" />
+<img src="https://github.com/NeutralSystem/STM32_DX-LR20_LORA/blob/main/Flipper_Zero_Lora_Terminal/FlipperPic/LoraFlipper2.png" alt="Diagram" width="200" />
 
 
 
