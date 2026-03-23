@@ -60,7 +60,97 @@ struct ChatPeerState {
 
 static ChatPeerState chatPeers[CHAT_MAX_PEERS];
 
+// Meshtastic AES key (default = LongFast channel key)
+static uint8_t meshAesKey[16] = {
+    0xd4, 0xf1, 0xbb, 0x3a, 0x20, 0x29, 0x07, 0x59,
+    0xf0, 0xbc, 0xff, 0xab, 0xcf, 0x4e, 0x69, 0x01
+};
+static bool meshKeyIsDefault = true;
+
 #define LED_PIN PC13
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  AES-128 (compact, for Meshtastic decryption)
+// ═════════════════════════════════════════════════════════════════════════════
+
+static uint8_t aes_sbox[256];  // computed at init, stored in RAM
+
+static void aes_init_sbox() {
+    // Compute S-box using GF(2^8) log/antilog
+    uint8_t p = 1, q = 1;
+    do {
+        p ^= (uint8_t)((p << 1) ^ ((p & 0x80) ? 0x1B : 0));
+        q ^= (uint8_t)(q << 1); q ^= (uint8_t)(q << 2);
+        q ^= (uint8_t)(q << 4); q ^= (uint8_t)((q & 0x80) ? 0x09 : 0);
+        uint8_t x = q ^ ((q<<1)|(q>>7)) ^ ((q<<2)|(q>>6)) ^ ((q<<3)|(q>>5)) ^ ((q<<4)|(q>>4));
+        aes_sbox[p] = x ^ 0x63;
+    } while (p != 1);
+    aes_sbox[0] = 0x63;
+}
+
+static uint8_t xtime(uint8_t x) { return (uint8_t)((x << 1) ^ ((x >> 7) * 0x1b)); }
+
+static void aes128_expandKey(const uint8_t key[16], uint8_t roundKeys[176]) {
+    memcpy(roundKeys, key, 16);
+    uint8_t rcon = 1;
+    for (uint8_t i = 4; i < 44; i++) {
+        uint8_t temp[4];
+        memcpy(temp, &roundKeys[(i - 1) * 4], 4);
+        if (i % 4 == 0) {
+            uint8_t t = temp[0];
+            temp[0] = aes_sbox[temp[1]] ^ rcon;
+            temp[1] = aes_sbox[temp[2]];
+            temp[2] = aes_sbox[temp[3]];
+            temp[3] = aes_sbox[t];
+            rcon = xtime(rcon);
+        }
+        for (uint8_t j = 0; j < 4; j++)
+            roundKeys[i * 4 + j] = roundKeys[(i - 4) * 4 + j] ^ temp[j];
+    }
+}
+
+static void aes128_encryptBlock(const uint8_t roundKeys[176], const uint8_t in[16], uint8_t out[16]) {
+    uint8_t s[16];
+    for (uint8_t i = 0; i < 16; i++) s[i] = in[i] ^ roundKeys[i];
+
+    for (uint8_t round = 1; round <= 10; round++) {
+        for (uint8_t i = 0; i < 16; i++) s[i] = aes_sbox[s[i]];
+        // ShiftRows
+        uint8_t t;
+        t=s[1]; s[1]=s[5]; s[5]=s[9]; s[9]=s[13]; s[13]=t;
+        t=s[2]; s[2]=s[10]; s[10]=t; t=s[6]; s[6]=s[14]; s[14]=t;
+        t=s[15]; s[15]=s[11]; s[11]=s[7]; s[7]=s[3]; s[3]=t;
+        // MixColumns (skip last round)
+        if (round < 10) {
+            for (uint8_t c = 0; c < 16; c += 4) {
+                uint8_t a=s[c], b=s[c+1], d=s[c+2], e=s[c+3], x=a^b^d^e;
+                s[c]^=x^xtime(a^b); s[c+1]^=x^xtime(b^d);
+                s[c+2]^=x^xtime(d^e); s[c+3]^=x^xtime(e^a);
+            }
+        }
+        const uint8_t* rk = &roundKeys[round * 16];
+        for (uint8_t i = 0; i < 16; i++) s[i] ^= rk[i];
+    }
+    memcpy(out, s, 16);
+}
+
+static void meshAesCtrDecrypt(const uint8_t key[16], uint32_t packetId, uint32_t fromNode,
+                               const uint8_t* cipher, uint8_t cipherLen, uint8_t* plain) {
+    uint8_t roundKeys[176];
+    aes128_expandKey(key, roundKeys);
+
+    uint8_t nonce[16] = {};
+    memcpy(nonce, &packetId, 4);
+    memcpy(nonce + 8, &fromNode, 4);
+
+    for (uint8_t offset = 0; offset < cipherLen; offset += 16) {
+        uint8_t ks[16];
+        aes128_encryptBlock(roundKeys, nonce, ks);
+        uint8_t n = (cipherLen - offset > 16) ? 16 : (cipherLen - offset);
+        for (uint8_t i = 0; i < n; i++) plain[offset + i] = cipher[offset + i] ^ ks[i];
+        uint32_t ctr; memcpy(&ctr, &nonce[12], 4); ctr++; memcpy(&nonce[12], &ctr, 4);
+    }
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  Utility Helpers
@@ -129,94 +219,101 @@ static bool protoSkipField(const uint8_t* data, uint8_t len, uint8_t& pos, uint8
     }
 }
 
+// Meshtastic OTA header: 4+4+4+1+1 = 14 bytes minimum
+
 static bool displayMeshtasticLite(const uint8_t* data, uint8_t len) {
+    // Meshtastic OTA: binary header, NOT protobuf
+    // Minimum packet: 14 header + 1 encrypted = 15 bytes
+    if (len < 15) return false;
+
+    // Parse binary header (all little-endian)
+    uint32_t toNode, fromNode, pktId;
+    memcpy(&toNode,   &data[0], 4);
+    memcpy(&fromNode, &data[4], 4);
+    memcpy(&pktId,    &data[8], 4);
+    uint8_t flags   = data[12];
+    uint8_t chHash  = data[13];
+
+    uint8_t hopLimit = flags & 0x07;
+    uint8_t hopStart = (flags >> 5) & 0x07;
+
+    // Determine header size: try 16 first (v2), fall back to 14
+    uint8_t hdrLen = 16;
+    if (len < 17) hdrLen = 14;  // not enough for v2 header + payload
+
+    uint8_t encLen = len - hdrLen;
+    const uint8_t* encData = data + hdrLen;
+
+    Serial1.println("  -- Mesh --");
+
+    Serial1.print("  To:!"); Serial1.println(toNode, HEX);
+    Serial1.print("  Fr:!"); Serial1.println(fromNode, HEX);
+    Serial1.print("  ID:"); Serial1.println(pktId, HEX);
+    Serial1.print("  Ch:"); Serial1.println(chHash, HEX);
+    Serial1.print("  Hop:"); Serial1.print(hopLimit); Serial1.print("/"); Serial1.println(hopStart);
+
+    // Decrypt
+    uint8_t plain[240];
+    if (encLen > sizeof(plain)) encLen = sizeof(plain);
+    meshAesCtrDecrypt(meshAesKey, pktId, fromNode, encData, encLen, plain);
+
+    // Parse decrypted protobuf Data message
     uint8_t pos = 0;
-
-    bool hasFrom = false, hasTo = false, hasId = false, hasChannel = false, hasHop = false;
-    uint32_t fromNode = 0, toNode = 0, pktId = 0, channel = 0, hopLimit = 0;
-    bool hasPortNum = false;
     uint32_t portNum = 0;
-    bool hasPlainPayloadLen = false;
-    uint32_t plainPayloadLen = 0;
-    bool hasEncryptedLen = false;
-    uint32_t encryptedLen = 0;
+    bool hasPort = false;
+    const uint8_t* appPayload = nullptr;
+    uint8_t appPayloadLen = 0;
 
-    while (pos < len) {
+    while (pos < encLen) {
         uint64_t key = 0;
-        if (!protoReadVarint(data, len, pos, key)) return false;
+        if (!protoReadVarint(plain, encLen, pos, key)) break;
         uint32_t field = (uint32_t)(key >> 3);
         uint8_t wire = (uint8_t)(key & 0x07);
 
         if (wire == 0) {
             uint64_t v = 0;
-            if (!protoReadVarint(data, len, pos, v)) return false;
-            if (field == 1) { hasFrom = true; fromNode = (uint32_t)v; }
-            else if (field == 2) { hasTo = true; toNode = (uint32_t)v; }
-            else if (field == 3) { hasId = true; pktId = (uint32_t)v; }
-            else if (field == 7) { hasChannel = true; channel = (uint32_t)v; }
-            else if (field == 12) { hasHop = true; hopLimit = (uint32_t)v; }
-            continue;
-        }
-
-        if (wire == 2) {
-            uint64_t l64 = 0;
-            if (!protoReadVarint(data, len, pos, l64)) return false;
-            if (l64 > (uint64_t)(len - pos)) return false;
-            uint8_t l = (uint8_t)l64;
-            const uint8_t* p = data + pos;
-
-            if (field == 10) {
-                hasEncryptedLen = true;
-                encryptedLen = l;
-            } else if (field == 11) {
-                uint8_t sp = 0;
-                while (sp < l) {
-                    uint64_t skey = 0;
-                    if (!protoReadVarint(p, l, sp, skey)) break;
-                    uint32_t sf = (uint32_t)(skey >> 3);
-                    uint8_t sw = (uint8_t)(skey & 0x07);
-
-                    if (sw == 0) {
-                        uint64_t sv = 0;
-                        if (!protoReadVarint(p, l, sp, sv)) break;
-                        if (sf == 1) {
-                            hasPortNum = true;
-                            portNum = (uint32_t)sv;
-                        }
-                    } else if (sw == 2) {
-                        uint64_t sl64 = 0;
-                        if (!protoReadVarint(p, l, sp, sl64)) break;
-                        if (sl64 > (uint64_t)(l - sp)) break;
-                        if (sf == 2) {
-                            hasPlainPayloadLen = true;
-                            plainPayloadLen = (uint32_t)sl64;
-                        }
-                        sp += (uint8_t)sl64;
-                    } else if (!protoSkipField(p, l, sp, sw)) {
-                        break;
-                    }
-                }
+            if (!protoReadVarint(plain, encLen, pos, v)) break;
+            if (field == 1) { hasPort = true; portNum = (uint32_t)v; }
+        } else if (wire == 2) {
+            uint64_t l = 0;
+            if (!protoReadVarint(plain, encLen, pos, l)) break;
+            if (l > (uint64_t)(encLen - pos)) break;
+            if (field == 2) {
+                appPayload = &plain[pos];
+                appPayloadLen = (uint8_t)l;
             }
-
-            pos += l;
-            continue;
+            pos += (uint8_t)l;
+        } else if (wire == 5) {
+            if (pos + 4 > encLen) break;
+            pos += 4;
+        } else {
+            if (!protoSkipField(plain, encLen, pos, wire)) break;
         }
-
-        if (!protoSkipField(data, len, pos, wire)) return false;
     }
 
-    bool looksMesh = (hasFrom || hasTo || hasId) && (hasEncryptedLen || hasPortNum || hasChannel);
-    if (!looksMesh) return false;
+    if (!hasPort) {
+        Serial1.println("  [NoDecrypt]");
+        hexDump(plain, encLen);
+        return true;
+    }
 
-    Serial1.println("  --- Meshtastic Lite ---");
-    if (hasFrom) { Serial1.print("  From:       0x"); Serial1.println(fromNode, HEX); }
-    if (hasTo)   { Serial1.print("  To:         0x"); Serial1.println(toNode, HEX); }
-    if (hasId)   { Serial1.print("  Packet ID:  0x"); Serial1.println(pktId, HEX); }
-    if (hasChannel) { Serial1.print("  Channel:    "); Serial1.println(channel); }
-    if (hasHop)  { Serial1.print("  Hop limit:  "); Serial1.println(hopLimit); }
-    if (hasPortNum) { Serial1.print("  PortNum:    "); Serial1.println(portNum); }
-    if (hasPlainPayloadLen) { Serial1.print("  Decoded payload bytes: "); Serial1.println(plainPayloadLen); }
-    if (hasEncryptedLen) { Serial1.print("  Encrypted bytes: "); Serial1.println(encryptedLen); }
+    Serial1.print("  Port: "); Serial1.println(portNum);
+
+    if (appPayload && appPayloadLen > 0) {
+
+
+        if (portNum == 1) {
+            Serial1.print("  Msg:  \"");
+            for (uint8_t i = 0; i < appPayloadLen; i++) {
+                char c = (char)appPayload[i];
+                Serial1.print((c >= 32 && c <= 126) ? c : '.');
+            }
+            Serial1.println("\"");
+        } else {
+            hexDump(appPayload, appPayloadLen);
+        }
+    }
+
     return true;
 }
 
@@ -653,11 +750,11 @@ static void displayPacket(const PacketInfo& pkt) {
     float snrDb = (float)pkt.snr / 4.0f;
 
     Serial1.println();
-    Serial1.print("=== RX #");
+    Serial1.print("RX #");
     Serial1.print(radio.getPacketCount());
-    Serial1.print(" === ");
+    Serial1.print(" @ ");
     Serial1.print(pkt.timestamp / 1000.0f, 3);
-    Serial1.println("s ================================");
+    Serial1.println("s");
 
     if (pkt.crcError) Serial1.println("  *** CRC ERROR ***");
 
@@ -686,7 +783,6 @@ static void displayPacket(const PacketInfo& pkt) {
         }
     }
 
-    Serial1.println("====================================================");
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -695,42 +791,31 @@ static void displayPacket(const PacketInfo& pkt) {
 
 static void cmdHelp() {
     Serial1.println();
-    Serial1.println("================ LoRa Tool Help ================");
+    Serial1.println("LoRa Terminal Help");
     Serial1.println("TX/RX");
-    Serial1.println("  send <msg>            Send text payload");
-    Serial1.println("  sendhex <hex>         Send raw payload bytes");
-    Serial1.println("  sniff                 Continuous RX packet monitor");
-    Serial1.println("  beacon <ms> <msg>     Periodic TX sender");
-    Serial1.println("  stop                  Stop sniff/beacon/analyze/chat");
-
-    Serial1.println("Encrypted Chat");
-    Serial1.println("  chatjoin <room> [key] Join room (key optional: 8..32 hex)");
-    Serial1.println("  chatnick <name>       Nickname (max 12 chars)");
-    Serial1.println("  chat <message>        Send encrypted message (optional in room)");
-    Serial1.println("  chatstatus            Show room/nick/sender ID");
-    Serial1.println("  chatleave             Leave room and clear keys");
-    Serial1.println("  (In chat room, plain text sends directly)");
-
-    Serial1.println("Radio Config");
-    Serial1.println("  modem <lora|gfsk>     Select active modem");
-    Serial1.println("  freq <MHz>            RF center frequency");
-    Serial1.println("  sf bw cr              LoRa PHY settings");
-    Serial1.println("  power preamble crc iq syncword");
-    Serial1.println("  header ldro symtimeout");
-    Serial1.println("  bitrate fdev fskbw whitening   (GFSK)");
-    Serial1.println("  rxboost standby regulator      HW behavior");
-
-    Serial1.println("Scan / Analyze");
-    Serial1.println("  scan [start end step] | 433 | 868 | 915 | all");
-    Serial1.println("  scanpreset <band>     Preset scan helper");
-    Serial1.println("  analyze [start end step]|433|868|915");
-    Serial1.println("  analyzecfg peak on|off");
-    Serial1.println("  analyzecfg threshold -95");
-    Serial1.println("  meshlisten <preset> <MHz>       Meshtastic-like sniff preset");
-
-    Serial1.println("Diagnostics/System");
-    Serial1.println("  status rssi reset uptime version sleep clear reboot");
-    Serial1.println("Tips: <cmd> -help, Ctrl+C/q stop modes, Ctrl+L clear");
+    Serial1.println("  send <msg>          Send text payload");
+    Serial1.println("  sendhex <hex>       Send raw hex bytes");
+    Serial1.println("  sniff               Continuous RX monitor");
+    Serial1.println("  beacon <ms> <msg>   Periodic TX");
+    Serial1.println("  stop                Stop active mode");
+    Serial1.println("Chat");
+    Serial1.println("  chatjoin <room> [key] Join encrypted room");
+    Serial1.println("  chatnick chat chatstatus chatleave");
+    Serial1.println("Radio");
+    Serial1.println("  freq sf bw cr power preamble crc iq");
+    Serial1.println("  syncword header ldro modem rxboost");
+    Serial1.println("  bitrate fdev fskbw whitening (GFSK)");
+    Serial1.println("Scan");
+    Serial1.println("  scan [start end step] | 433|868|915");
+    Serial1.println("  analyze analyzecfg scanpreset");
+    Serial1.println("Meshtastic");
+    Serial1.println("  meshlisten <preset> [region|MHz]");
+    Serial1.println("    regions: us eu868 eu433 cn jp anz kr tw in ru");
+    Serial1.println("  meshkey <32hex>|default    AES key");
+    Serial1.println("System");
+    Serial1.println("  status rssi reset uptime version");
+    Serial1.println("  sleep clear reboot");
+    Serial1.println("Use <cmd> -help for details");
 }
 
 static void cmdSend(const char* arg) {
@@ -979,13 +1064,29 @@ static void cmdSyncWord(const char* arg) {
     else                 Serial1.println();
 }
 
+static float meshRegionFreq(const char* r) {
+    if (strcasecmp(r, "us") == 0)     return 906.875f;
+    if (strcasecmp(r, "eu868") == 0)  return 869.525f;
+    if (strcasecmp(r, "eu433") == 0)  return 433.175f;
+    if (strcasecmp(r, "cn") == 0)     return 470.0f;
+    if (strcasecmp(r, "jp") == 0)     return 920.0f;
+    if (strcasecmp(r, "anz") == 0)    return 916.0f;
+    if (strcasecmp(r, "kr") == 0)     return 921.9f;
+    if (strcasecmp(r, "tw") == 0)     return 923.0f;
+    if (strcasecmp(r, "in") == 0)     return 865.0625f;
+    if (strcasecmp(r, "ru") == 0)     return 868.9f;
+    return 0.0f;
+}
+
 static void cmdMeshListen(const char* arg) {
     char preset[16] = {};
     const char* p = arg;
 
     while (*p == ' ') p++;
     if (*p == '\0') {
-        Serial1.println("[ERR] Usage: meshlisten <longfast|longslow|shortfast> <freqMHz>");
+        Serial1.println("[ERR] meshlisten <preset> [region|MHz]");
+        Serial1.println("  Presets: longfast longslow shortfast");
+        Serial1.println("  Regions: us eu868 eu433 cn jp anz kr tw in ru");
         return;
     }
 
@@ -999,26 +1100,28 @@ static void cmdMeshListen(const char* arg) {
     preset[presetLen] = '\0';
 
     while (*p == ' ') p++;
+
+    float mhz = 0.0f;
     if (*p == '\0') {
-        Serial1.println("[ERR] Usage: meshlisten <longfast|longslow|shortfast> <freqMHz>");
-        return;
-    }
-
-    char* end = nullptr;
-    float mhz = strtof(p, &end);
-    if (end == p) {
-        Serial1.println("[ERR] Usage: meshlisten <longfast|longslow|shortfast> <freqMHz>");
-        return;
-    }
-    while (*end == ' ') end++;
-    if (*end != '\0') {
-        Serial1.println("[ERR] Usage: meshlisten <longfast|longslow|shortfast> <freqMHz>");
-        return;
-    }
-
-    if (mhz < 150.0f || mhz > 960.0f) {
-        Serial1.println("[ERR] Frequency out of range (150-960 MHz)");
-        return;
+        // No freq/region given — default to US
+        mhz = 906.875f;
+    } else {
+        // Try region name first
+        char region[8] = {};
+        uint8_t ri = 0;
+        const char* rp = p;
+        while (*rp && *rp != ' ' && ri < sizeof(region) - 1) region[ri++] = *rp++;
+        region[ri] = '\0';
+        mhz = meshRegionFreq(region);
+        if (mhz == 0.0f) {
+            // Not a region, try as MHz number
+            char* end = nullptr;
+            mhz = strtof(p, &end);
+            if (end == p || mhz < 150.0f || mhz > 960.0f) {
+                Serial1.println("[ERR] Bad freq/region. Use: us eu868 eu433 cn jp anz kr tw in ru");
+                return;
+            }
+        }
     }
 
     radio.setModem(MODEM_LORA);
@@ -1052,9 +1155,42 @@ static void cmdMeshListen(const char* arg) {
     Serial1.print(mhz, 3);
     Serial1.println(" MHz");
     meshDecodeHint = true;
-    Serial1.println("[MESH] Meshtastic-lite decode enabled (best effort).");
+    Serial1.println("[MESH] Decode+AES on");
+    Serial1.print("[MESH] Key: ");
+    Serial1.println(meshKeyIsDefault ? "default (LongFast)" : "custom");
 
     cmdSniff();
+}
+
+static void cmdMeshKey(const char* arg) {
+    while (*arg == ' ') arg++;
+
+    if (*arg == '\0' || strcasecmp(arg, "default") == 0) {
+        static const uint8_t dk[16] = {
+            0xd4,0xf1,0xbb,0x3a,0x20,0x29,0x07,0x59,
+            0xf0,0xbc,0xff,0xab,0xcf,0x4e,0x69,0x01
+        };
+        memcpy(meshAesKey, dk, 16);
+        meshKeyIsDefault = true;
+        Serial1.println("[MESH] Key=default");
+        return;
+    }
+
+    size_t slen = strlen(arg);
+    if (slen == 32) {
+        uint8_t tmp[16];
+        for (uint8_t i = 0; i < 16; i++) {
+            uint8_t hi = hexNibble(arg[i * 2]);
+            uint8_t lo = hexNibble(arg[i * 2 + 1]);
+            if (hi > 15 || lo > 15) { Serial1.println("[ERR] Bad hex"); return; }
+            tmp[i] = (uint8_t)((hi << 4) | lo);
+        }
+        memcpy(meshAesKey, tmp, 16);
+        meshKeyIsDefault = false;
+        Serial1.print("[MESH] Key="); printHex16(meshAesKey);
+        return;
+    }
+    Serial1.println("[ERR] meshkey <32hex>|default");
 }
 
 static void cmdHeader(const char* arg) {
@@ -1319,89 +1455,89 @@ static void cmdChatSend(const char* arg) {
 static void cmdStatus() {
     const LoRaConfig& c = radio.getConfig();
     Serial1.println();
-    Serial1.println("+------------ Radio Configuration ------------+");
+    Serial1.println("Radio Configuration");
 
-    Serial1.print("| Modem:       ");
+    Serial1.print("  Modem:       ");
     Serial1.println(c.modem == MODEM_LORA ? "LoRa" : "GFSK");
 
-    Serial1.print("| Frequency:   ");
+    Serial1.print("  Frequency:   ");
     Serial1.print((float)c.frequencyHz / 1e6f, 3);
     Serial1.println(" MHz");
 
-    Serial1.print("| Spreading:   SF");
+    Serial1.print("  SF:          ");
     Serial1.println(c.spreadingFactor);
 
-    Serial1.print("| Bandwidth:   ");
+    Serial1.print("  BW:          ");
     Serial1.println(SX1262Radio::bwToStr(c.bandwidth));
 
-    Serial1.print("| Coding Rate: 4/");
+    Serial1.print("  CR:          4/");
     Serial1.println(c.codingRate + 4);
 
-    Serial1.print("| TX Power:    ");
+    Serial1.print("  Power:       ");
     Serial1.print(c.txPowerDbm);
     Serial1.println(" dBm");
 
-    Serial1.print("| Preamble:    ");
+    Serial1.print("  Preamble:    ");
     Serial1.print(c.preambleLength);
-    Serial1.println(" symbols");
+    Serial1.println(" sym");
 
-    Serial1.print("| CRC:         ");
+    Serial1.print("  CRC:         ");
     Serial1.println(c.crcOn ? "ON" : "OFF");
 
-    Serial1.print("| IQ:          ");
+    Serial1.print("  IQ:          ");
     Serial1.println(c.iqInverted ? "Inverted" : "Normal");
 
-    Serial1.print("| Sync Word:   0x");
+    Serial1.print("  Sync:        0x");
     if (c.syncWord < 0x10) Serial1.print('0');
     Serial1.print(c.syncWord, HEX);
-    if (c.syncWord == 0x12)      Serial1.println(" (Private)");
-    else if (c.syncWord == 0x34) Serial1.println(" (Public)");
+    if (c.syncWord == 0x12)      Serial1.println(" (Priv)");
+    else if (c.syncWord == 0x34) Serial1.println(" (Pub)");
     else                         Serial1.println();
 
-    Serial1.print("| Header:      ");
+    Serial1.print("  Header:      ");
     if (c.implicitHeader) {
-        Serial1.print("Implicit (len=");
+        Serial1.print("Implicit (");
         Serial1.print(c.implicitPayloadLen);
         Serial1.println(")");
     } else {
         Serial1.println("Explicit");
     }
 
-    Serial1.print("| LDRO:        ");
+    Serial1.print("  LDRO:        ");
     if (c.ldroMode == LDRO_AUTO) Serial1.println("AUTO");
     else if (c.ldroMode == LDRO_ON) Serial1.println("ON");
     else Serial1.println("OFF");
 
-    Serial1.print("| SymTimeout:  ");
+    Serial1.print("  SymTimeout:  ");
     Serial1.println(c.symbolTimeout);
 
-    Serial1.print("| RX Gain:     ");
-    Serial1.println(c.rxBoosted ? "Boosted" : "Power-save");
+    Serial1.print("  RX Gain:     ");
+    Serial1.println(c.rxBoosted ? "Boosted" : "Normal");
 
-    Serial1.print("| Standby:     ");
+    Serial1.print("  Standby:     ");
     Serial1.println(c.standbyXosc ? "XOSC" : "RC");
 
-    Serial1.print("| Regulator:   ");
+    Serial1.print("  Regulator:   ");
     Serial1.println(c.regulatorDcdc ? "DC-DC" : "LDO");
 
     if (c.modem == MODEM_GFSK) {
-        Serial1.print("| GFSK BR:     ");
+        Serial1.print("  GFSK BR:     ");
         Serial1.print(c.gfskBitrate);
         Serial1.println(" bps");
 
-        Serial1.print("| GFSK Fdev:   ");
+        Serial1.print("  GFSK Fdev:   ");
         Serial1.print(c.gfskFdev);
         Serial1.println(" Hz");
 
-        Serial1.print("| GFSK BW:     0x");
+        Serial1.print("  GFSK BW:     0x");
         if (c.gfskBw < 0x10) Serial1.print('0');
         Serial1.println(c.gfskBw, HEX);
 
-        Serial1.print("| Whitening:   ");
+        Serial1.print("  Whitening:   ");
         Serial1.println(c.gfskWhiteningOn ? "ON" : "OFF");
     }
 
-    Serial1.print("| State:       ");
+    Serial1.print("  State:       ");
     switch (appMode) {
         case MODE_IDLE:      Serial1.println("IDLE");      break;
         case MODE_SNIFFING:  Serial1.println("SNIFFING");  break;
@@ -1410,12 +1546,10 @@ static void cmdStatus() {
         case MODE_CHAT:      Serial1.println("CHAT");      break;
     }
 
-    Serial1.print("| Packets RX:  ");
+    Serial1.print("  Packets RX:  ");
     Serial1.println(radio.getPacketCount());
-    Serial1.print("| CRC Errors:  ");
+    Serial1.print("  CRC Errors:  ");
     Serial1.println(radio.getCrcErrorCount());
-
-    Serial1.println("+----------------------------------------------+");
 }
 
 static void cmdRssi() {
@@ -1720,9 +1854,14 @@ static void showCmdHelp(const char* cmd) {
     } else if (strcasecmp(cmd, "scanpreset") == 0) {
         Serial1.println("scanpreset <433|868|915|all>");
     } else if (strcasecmp(cmd, "meshlisten") == 0) {
-        Serial1.println("meshlisten <longfast|longslow|shortfast> <freqMHz>");
-        Serial1.println("Applies Meshtastic-like LoRa PHY settings and starts sniff.");
-        Serial1.println("Shows raw dump plus basic Meshtastic protobuf field summary.");
+        Serial1.println("meshlisten <preset> [region|MHz]");
+        Serial1.println("  preset: longfast longslow shortfast");
+        Serial1.println("  region: us eu868 eu433 cn jp anz kr tw in ru");
+        Serial1.println("  Default region: us (906.875 MHz)");
+        Serial1.println("  Or specify MHz directly: meshlisten longfast 869.525");
+    } else if (strcasecmp(cmd, "meshkey") == 0) {
+        Serial1.println("meshkey <32hex>|default");
+        Serial1.println("Sets AES key for Meshtastic decryption.");
     } else if (strcasecmp(cmd, "analyze") == 0) {
         Serial1.println("analyze [startMHz endMHz stepKHz] | 433 | 868 | 915");
         Serial1.println("Shows per-frequency RSSI table, threshold markers, and peaks.");
@@ -1884,6 +2023,7 @@ static void processCommand(char* line) {
     else if (strcasecmp(line, "scan")     == 0) cmdScan(arg);
     else if (strcasecmp(line, "scanpreset") == 0) cmdScanPreset(arg);
     else if (strcasecmp(line, "meshlisten") == 0) cmdMeshListen(arg);
+    else if (strcasecmp(line, "meshkey")  == 0) cmdMeshKey(arg);
     else if (strcasecmp(line, "analyze")  == 0) cmdAnalyze(arg);
     else if (strcasecmp(line, "analyzecfg") == 0) cmdAnalyzeCfg(arg);
     else if (strcasecmp(line, "chatjoin") == 0) cmdChatJoin(arg);
@@ -1961,6 +2101,7 @@ static void readSerial() {
 // ═════════════════════════════════════════════════════════════════════════════
 
 void setup() {
+    aes_init_sbox();
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, HIGH);
 
@@ -1972,12 +2113,10 @@ void setup() {
     Serial1.begin(115200);
     delay(200);
 
-    Serial1.println("\n\n");
-    Serial1.println("+=============================================+");
-    Serial1.println("|  STM32 LoRa Terminal  v1.0                  |");
-    Serial1.println("|  SX1262 (DX-LR20) @ "); Serial1.print(SystemCoreClock / 1000000); Serial1.println(" MHz        |");
-    Serial1.println("|  Type 'help' for commands                   |");
-    Serial1.println("+=============================================+");
+    Serial1.println("\n");
+    Serial1.println("STM32 LoRa Terminal v1.0");
+    Serial1.print("SX1262 (DX-LR20) @ "); Serial1.print(SystemCoreClock / 1000000); Serial1.println(" MHz");
+    Serial1.println("Type 'help' for commands");
 
     Serial1.println("[INIT] Starting radio...");
     if (!radio.begin(915000000)) {

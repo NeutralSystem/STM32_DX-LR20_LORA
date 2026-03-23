@@ -11,3 +11,4 @@ Flipper_Zero_Lora_Terminal/*.elf.map
 Flipper_Zero_Lora_Terminal/*.impsyms
 build_flipper_app.bat
 build_flipper_app.sh
+platformio.ini
