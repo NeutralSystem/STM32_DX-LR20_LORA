@@ -18,9 +18,11 @@ A **Flipper Zero application** (.fap) that turns the Flipper into a full-feature
 | **Send Message** | On-screen keyboard to type and transmit LoRa text messages |
 | **Sniff Packets** | Continuous receive mode — scrolling display of incoming packets with RSSI/SNR |
 | **Frequency Scan** | RSSI sweep across 433 / 868 / 915 MHz bands (or all at once) |
-| **Radio Config** | Live-adjust Modem, SF, BW, CR, TX Power, and CRC without recompiling |
-| **Encrypted Chat** | Join AES-encrypted chat rooms by room number — full duplex with live RX |
+| **Radio Config** | Live-adjust all 13 radio parameters without recompiling |
+| **Encrypted Chat** | Join XTEA-encrypted chat rooms — full duplex with live RX, press OK to compose |
+| **Mesh Listen** | Meshtastic passive listener — pick preset + region, auto-decrypts with AES-128 |
 | **Radio Status** | Query and display the current radio configuration at a glance |
+| **About** | Project info, hardware details, and GitHub link |
 
 ---
 
@@ -155,30 +157,47 @@ To build a clean, portable Flipper + LoRa module:
 
 ### Main Menu
 
-When you launch the app, you'll see six options:
+When you launch the app, you'll see eight options:
 
 1. **Send Message** — Opens the Flipper keyboard. Type your message and press Enter to transmit via LoRa.
 
-2. **Sniff Packets** — Puts the radio in continuous RX. Incoming packets scroll on screen with RSSI and SNR metadata. Press Back to stop and return.
+2. **Sniff Packets** — Puts the radio in continuous RX. Incoming packets scroll on screen with RSSI, SNR, hex dump, and Meshtastic decode (if enabled). Press Back to stop.
 
 3. **Frequency Scan** — Choose a band (All / 433 MHz / 868 MHz / 915 MHz). The board sweeps the band and reports RSSI levels at each step. Results scroll on screen.
 
-4. **Radio Config** — Scroll through radio parameters and adjust them with Left/Right:
+4. **Radio Config** — Scroll through 13 radio parameters and adjust with Left/Right:
+   - **Frequency**: 433.000 / 433.125 / 868.000 / 868.100 / 915.000 / 906.875 MHz
    - **Modem**: LoRa or GFSK
    - **Spreading Factor**: SF5 through SF12
-   - **Bandwidth**: 7.8 kHz to 500 kHz
+   - **Bandwidth**: 7.8 kHz to 500 kHz (10 options)
    - **Coding Rate**: 4/5 through 4/8
    - **TX Power**: -9 to +22 dBm
+   - **Preamble**: 4 / 8 / 12 / 16 / 32 / 64 symbols
    - **CRC**: On or Off
+   - **IQ Polarity**: Normal or Inverted
+   - **Sync Word**: 0x12 (Private) or 0x34 (Public)
+   - **Header Mode**: Explicit or Implicit
+   - **LDRO**: Auto / On / Off
+   - **RX Boost**: On or Off
 
    Changes are sent to the board immediately — no save step needed.
 
-5. **Encrypted Chat** — Enter a room number (0–255) to join. Once joined:
-   - Incoming messages appear automatically
-   - Press Back to leave the room
-   - Messages are AES-encrypted by the STM32 firmware
+5. **Encrypted Chat** — Pre-filled with default room "Flipperchat 12345678" — edit or press OK to join. Once joined:
+   - Incoming messages appear automatically (live RX)
+   - Press **OK** to compose and send a message
+   - Press **Back** to leave the room
+   - Encryption: XTEA-CTR with SipHash-2-4 MAC
 
-6. **Radio Status** — Sends the `status` command and displays the current radio configuration.
+6. **Mesh Listen** — Meshtastic passive listener:
+   - First, pick a preset: **LongFast** (SF11/BW250), **LongSlow** (SF12/BW125), or **ShortFast** (SF7/BW250)
+   - Then pick a region: US, EU868, EU433, CN, JP, ANZ, KR, TW, IN, RU
+   - The board auto-configures all LoRa parameters and starts sniffing
+   - Received Meshtastic packets are decrypted (AES-128-CTR) and decoded
+   - Press Back to stop and return
+
+7. **Radio Status** — Sends the `status` command and displays the current radio configuration.
+
+8. **About** — Project info, hardware details, encryption methods, and GitHub link.
 
 ### Tips
 
@@ -186,6 +205,7 @@ When you launch the app, you'll see six options:
 - **Range check**: Use low SF and high BW for close-range speed, high SF and low BW for maximum range.
 - **Packet sniffing**: Both sides must use the same frequency, SF, BW, CR, and sync word to see each other's packets.
 - **Power draw**: At +22 dBm, the radio draws ~120 mA during TX. Lower the TX power if you need to conserve Flipper battery.
+- **5V auto-power**: The app automatically enables 5V on GPIO Pin 1 when launched and disables it on exit.
 
 ---
 
