@@ -45,8 +45,14 @@ You can copy the file using:
 ## Project Picture
 
 ### Simplest Flipper module possible.
-https://github.com/NeutralSystem/STM32_DX-LR20_LORA/blob/main/Flipper_Zero_Lora_Terminal/FlipperPic/LoraFlipper1.png
-https://github.com/NeutralSystem/STM32_DX-LR20_LORA/blob/main/Flipper_Zero_Lora_Terminal/FlipperPic/LoraFlipper2.png
+#### Front
+
+<img src="https://github.com/NeutralSystem/STM32_DX-LR20_LORA/blob/main/Flipper_Zero_Lora_Terminal/FlipperPic/LoraFlipper1.png" alt="Diagram" width="150" />
+
+#### Back
+
+<img src="https://github.com/NeutralSystem/STM32_DX-LR20_LORA/blob/main/Flipper_Zero_Lora_Terminal/FlipperPic/LoraFlipper2.png" alt="Diagram" width="150" />
+
 
 
 ## Wiring — Flipper Zero to DX-LR20 Board
