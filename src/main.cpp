@@ -148,7 +148,8 @@ static void meshAesCtrDecrypt(const uint8_t key[16], uint32_t packetId, uint32_t
         aes128_encryptBlock(roundKeys, nonce, ks);
         uint8_t n = (cipherLen - offset > 16) ? 16 : (cipherLen - offset);
         for (uint8_t i = 0; i < n; i++) plain[offset + i] = cipher[offset + i] ^ ks[i];
-        uint32_t ctr; memcpy(&ctr, &nonce[12], 4); ctr++; memcpy(&nonce[12], &ctr, 4);
+        // Big-endian increment (matches mbedTLS AES-CTR)
+        for (int8_t i = 15; i >= 0; i--) { if (++nonce[i]) break; }
     }
 }
 
