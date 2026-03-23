@@ -282,13 +282,6 @@ STM32_DX-LR20_LORA/
 ├── Flipper_Zero_Lora_Terminal/
 │   ├── lora_terminal.fap         # Pre-built Flipper Zero app
 │   └── README.md                 # Flipper app documentation
-├── flipper_app/                  # Flipper app source code
-│   ├── application.fam
-│   ├── lora_terminal.h
-│   ├── lora_terminal_app.c
-│   ├── uart_bridge.c
-│   ├── icons/
-│   └── scenes/
 ├── platformio.ini                # PlatformIO build configuration
 └── build_hex.bat                 # HEX generation script for ISP flashing
 ```
